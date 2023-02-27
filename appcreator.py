@@ -1,11 +1,26 @@
 import customtkinter as ctk, csv, threading, time, codecs, tracemalloc, tkinter as tk
 from os import path, mkdir, system, _exit
 from chardet import detect
+from tkinter import ttk
+from webbrowser import open_new_tab
 from io import BytesIO
 from difflib import Differ
 from datetime import datetime
 from win32.win32api import GetSystemMetrics
 from tempfile import NamedTemporaryFile
+
+
+class CurrentProj:
+    def __init__(self):
+        self._proj_path = None
+
+    @property
+    def proj_path(self):
+        return self._proj_path
+
+    @proj_path.setter
+    def proj_path(self, new_value):
+        self._proj_path = new_value
 
 class CTkElement:
     def __init__(self, element_type, parent, **kwargs):
@@ -31,15 +46,6 @@ class CTkElement:
             height = self.kwargs.get("height", 400)
             border_width = self.kwargs.get("border_width", 0)
             self.element = ctk.CTkFrame(self.parent, width=width, height=height, border_width=border_width, **self.kwargs)
-
-    def grid(self, **kwargs):
-        self.element.grid(**kwargs)
-
-    def pack(self, **kwargs):
-        self.element.pack(**kwargs)
-
-    def place(self, **kwargs):
-        self.element.place(**kwargs)
 
 # Handles application configuration and updates
 class AppHandler():
@@ -68,6 +74,25 @@ class AppHandler():
         exit_timer.start()
         system(installer_loc)
     '''
+
+    def convert_to_frame(self, filename):
+        with open(filename, 'r') as f:
+            code = f.read()
+
+        # Replace "ctk.CTk()" with "ctk.CTkFrame()"
+        code = code.replace("ctk.CTk()", "ctk.CTkFrame()")
+
+        # Create a temporary root window to execute the code
+        temp_root = ctk.CTk()
+        temp_root.eval(code)
+
+        # Get the frame from the temporary root window
+        frame = temp_root.winfo_children()[0]
+
+        # Destroy the temporary root window
+        temp_root.destroy()
+
+        return frame
     
     def wait_for_exit(self):
         timer = 5
@@ -84,6 +109,9 @@ class AppCreatorStart():
         self.acs = ctk.CTkToplevel()
         self.width = 600
         self.height = 600
+
+        create = kwargs.get("create", "none")
+        start = kwargs.get("start", "notfirst")
 
         self.acs.geometry(str(self.width)+"x"+str(self.height))  # Sets window size to monitor pixel width and height
 
@@ -102,7 +130,7 @@ class AppCreatorStart():
         self.load_project_button.pack(side="top", pady=10)
         
         # Add a small text at the bottom with version and creator information
-        self.info_label = ctk.CTkLabel(self.dashboard, text="Version: 0.1 | Created by: Regian Landström", font=ctk.CTkFont(size=20, weight="bold"))
+        self.info_label = ctk.CTkLabel(self.dashboard, text="Version: 0.1 | Created by: Buster Landstrom (alias)", font=ctk.CTkFont(size=20, weight="bold"))
         self.info_label.pack(side="bottom", pady=10)
 
         self.nproj_frame = ctk.CTkFrame(self.acs, corner_radius=0, fg_color="transparent")
@@ -163,8 +191,17 @@ class AppCreatorStart():
         self.lproj_bbtn = ctk.CTkButton(self.lproj_frame, text="Back", command=self.dashboard_event)
         self.lproj_bbtn.pack(side="bottom", pady=10)
 
-        self.select_frame_by_name("dashboard")
-        self.acs.protocol("WM_DELETE_WINDOW", self.quit_app)
+        if create == "none":
+            self.select_frame_by_name("dashboard")
+        elif create == "new":
+            self.select_frame_by_name("nproj")
+        elif create == "load":
+            self.select_frame_by_name("lproj")
+
+        if start == "first":
+            self.acs.protocol("WM_DELETE_WINDOW", self.quit_app)
+        elif start == "notfirst":
+            self.acs.protocol("WM_DELETE_WINDOW", self.acs.destroy)
 
     def create_project(self):
         proj_name = self.proj_name_entry.get()
@@ -182,10 +219,9 @@ class AppCreatorStart():
 
         # Write some text to the file
         with open(file_path, "w") as f:
-            f.write(f"import customtkinter as ctk, tkinter as tk, threading\nfrom os import _exit\n\n'''\nCreated using the AppCreator by Regian Landstrom\nGithub Profile: https://github.com/BusterLandstrom\nGithub Repo: https://github.com/BusterLandstrom\n'''\n\nclass {proj_cname}(ctk.CTk):\n    def __init__(self, *args, **kwargs):\n        ctk.CTk.__init__(self, *args, **kwargs)\n        self.geometry('600x600')\n\n\n        self.protocol('WM_DELETE_WINDOW', self.quit_app)\n\n    def quit_app(self):\n        _exit(1)\n\nif __name__ == '__main__':\n    ctk.deactivate_automatic_dpi_awareness()\n    ctk.set_appearance_mode('{amode}')\n    ctk.set_default_color_theme('{csheme}')\n\n    # Main window\n    root={proj_cname}()\n    root.title('{proj_name}')\n    root.mainloop()")
-        
+            f.write(f"class {proj_cname}(ctk.CTk):\n    def __init__(self, *args, **kwargs):\n        ctk.CTk.__init__(self, *args, **kwargs)\n        self.geometry('600x600')\n\n\n        self.protocol('WM_DELETE_WINDOW', self.quit_app)\n\n    def quit_app(self):\n        _exit(1)")
+        CurrentProj._proj_path = file_path
         AppHandler().close_and_open_window(self.acs, root)
-
 
     def select_frame_by_name(self, name):
 
@@ -225,7 +261,70 @@ class AppCreator(ctk.CTk):
 
         self.geometry(str(self.width)+"x"+str(self.height))  # Sets window size to monitor pixel width and height
 
-        self.open_toplevel(AppCreatorStart())
+        # Create a top menu
+        top_menu = tk.Menu(self)
+        file_menu = tk.Menu(top_menu, tearoff=0)
+        file_menu.add_command(label="New Project", command=self.new_proj)
+        file_menu.add_command(label="Load Project", command=self.load_proj)
+        top_menu.add_cascade(label="File", menu=file_menu)
+        edit_menu = tk.Menu(top_menu, tearoff=0)
+        edit_menu.add_command(label="Cut", command=self.cut)
+        edit_menu.add_command(label="Copy", command=self.copy)
+        edit_menu.add_command(label="Paste", command=self.paste)
+        top_menu.add_cascade(label="Edit", menu=edit_menu)
+        settings_menu = tk.Menu(top_menu, tearoff=0)
+        settings_menu.add_command(label="Preferences", command=self.settings)
+        top_menu.add_cascade(label="Settings", menu=settings_menu)
+        help_menu = tk.Menu(top_menu, tearoff=0)
+        help_menu.add_command(label="Documentation", command=self.documentation)
+        help_menu.add_command(label="About", command=self.about)
+        top_menu.add_cascade(label="Help", menu=help_menu)
+        self.config(menu=top_menu)
+
+        # Attributes. e.g. set grid layout 1x2
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=1)
+
+        # Create navigation frame
+        self.navigation_frame = ctk.CTkFrame(self, corner_radius=0)
+        self.navigation_frame.grid(row=0, column=0, sticky="nsew")
+        self.navigation_frame.grid_rowconfigure(4, weight=1)
+        
+        self.navigation_frame_label = ctk.CTkLabel(self.navigation_frame, text="AppCreator",
+                                                            compound="left", font=ctk.CTkFont(size=60, weight="bold"))
+        self.navigation_frame_label.grid(row=1, column=0, padx=50, pady=(40,40))
+
+        self.home_button = ctk.CTkButton(self.navigation_frame, corner_radius=0, height=40, border_spacing=10, text="🏠 Home",
+                                                   fg_color="transparent",
+                                                   command=self.visual_event, font=ctk.CTkFont(size=25, weight="bold"))
+        self.home_button.grid(row=2, column=0, sticky="ew")
+
+        self.loan_frame_button = ctk.CTkButton(self.navigation_frame, corner_radius=0, height=40, border_spacing=10, text="⏳ Loan",
+                                                   fg_color="transparent",
+                                                   command=self.code_event, font=ctk.CTkFont(size=25, weight="bold"))
+        self.loan_frame_button.grid(row=3, column=0, sticky="ew")
+        
+
+        self.visual_frame = ctk.CTkFrame(self, corner_radius=0)
+
+        self.visual_window = ctk.CTkFrame(self.visual_frame, corner_radius=0)
+        self.visual_window.pack()
+
+        self.code_frame = ctk.CTkFrame(self, corner_radius=0)
+
+        #self.visual_frame = ctk.CTkFrame(self, corner_radius=0)
+
+        def wait_proj():
+            if CurrentProj._proj_path != None:
+                self.visual_window.pack_forget()
+                self.visual_window = AppHandler().convert_to_frame(CurrentProj.proj_path)
+                self.visual_window.pack()
+            else:
+                self.after(100, wait_proj)
+        
+        wait_proj()
+        self.open_toplevel(AppCreatorStart(start="first"))
+        self.visual_event
     
     # Opens a TopLevel window
     def open_toplevel(self, function):
@@ -233,12 +332,60 @@ class AppCreator(ctk.CTk):
         tl = function
     # END
 
+    # Define the functions for the menu options here
+    def new_proj(self):
+        AppCreatorStart(create="new")
+    
+    def load_proj(self):
+        AppCreatorStart(create="load")
+    
+    def cut(self):
+        print("Cut")
+    
+    def copy(self):
+        print("Copy")
+    
+    def paste(self):
+        print("Paste")
+    
+    def settings(self):
+        #Settings()
+        print("Settings")
+    
+    def documentation(self):
+        open_new_tab("https://github.com/BusterLandstrom/CTkAppCreator")
+    
+    def about(self):
+        print("Bbout")
 
+    def select_frame_by_name(self, name):
+        if name == "visual":
+            self.visual_frame.grid(row=0, column=1, sticky="nsew")
+        else:
+            self.visual_frame.grid_forget()
+        if name == "code":
+            self.code_frame.grid(row=0, column=1, sticky="nsew")
+        else:
+            self.code_frame.grid_forget()
+
+    def visual_event(self):
+        self.select_frame_by_name("visual")
+    
+    def code_event(self):
+        self.select_frame_by_name("code")
+
+    # Event trigger to change scaling of UI elements
+    def change_scaling_event(self, new_scaling: str):
+        new_scaling_float = int(new_scaling.replace("%", "")) / 100
+        ctk.set_widget_scaling(new_scaling_float)
+    # END
 
 
 
 # Main loop (Application loop)
 if __name__ == "__main__":
+
+    CurrentProj = CurrentProj()
 
     ctk.deactivate_automatic_dpi_awareness()
     ctk.set_appearance_mode("dark")
